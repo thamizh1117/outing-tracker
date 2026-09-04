@@ -8,11 +8,15 @@ try {
 const path = require('path');
 const fs = require('fs');
 
-const envPath = path.join(__dirname, '.env');
-if (fs.existsSync(envPath)) {
-  require('dotenv').config({ path: envPath });
-} else {
-  require('dotenv').config();
+try {
+  const envPath = path.join(__dirname, '.env');
+  if (fs.existsSync(envPath)) {
+    require('dotenv').config({ path: envPath });
+  } else {
+    require('dotenv').config();
+  }
+} catch {
+  // Environment variables are injected directly into process.env on platforms like Render
 }
 const express = require('express');
 const mongoose = require('mongoose');
