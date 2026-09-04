@@ -16,6 +16,29 @@ router.post('/', verifyToken, requireRole('student'), async (req, res) => {
       expectedReturnTime,
     } = req.body;
 
+    const depDate = new Date(expectedDepartureTime);
+    const retDate = new Date(expectedReturnTime);
+
+    if (isNaN(depDate.getTime()) || isNaN(retDate.getTime())) {
+      return res.status(400).json({ message: 'Invalid departure or return timestamp' });
+    }
+
+    if (retDate <= depDate) {
+      return res.status(400).json({ message: 'Expected return time must be after expected departure time' });
+    }
+
+    // Check if student already has an active outing (pending, approved, ongoing, overdue)
+    const existingActive = await OutingRequest.findOne({
+      student: req.user.id,
+      status: { $in: ['pending', 'approved', 'ongoing', 'overdue'] },
+    });
+
+    if (existingActive) {
+      return res.status(400).json({
+        message: `You already have an active outing request (status: ${existingActive.status}). Please return or resolve your active outing first.`,
+      });
+    }
+
     const outing = await OutingRequest.create({
       student: req.user.id,
       destination,
@@ -105,6 +128,10 @@ router.patch(
           message: 'Outing request not found',
         });
       }
+
+      await Student.findByIdAndUpdate(outing.student, {
+        currentStatus: 'approved',
+      });
 
       res.json(outing);
     } catch (err) {

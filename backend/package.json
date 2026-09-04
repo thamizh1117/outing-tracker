@@ -1,5 +1,5 @@
 {
-  "name": "hostel-outing-backend",
+  "name": "backend",
   "version": "1.0.0",
   "description": "Backend API for Smart Hostel Outing Management System",
   "main": "server.js",

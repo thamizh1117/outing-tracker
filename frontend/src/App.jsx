@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import {
   apiFetch,
   clearSession,
+  getBrowserLocation,
   readSession,
   saveSession,
 } from './api';
@@ -42,25 +43,23 @@ function App() {
   const [session, setSession] = useState(() => readSession());
   const [studentOutings, setStudentOutings] = useState([]);
 
-  useEffect(() => {
-    let mounted = true;
-    let intervalId;
-
-    async function loadOutings() {
-      if (!session || session.role !== 'student') {
-        if (mounted) setStudentOutings([]);
-        return;
-      }
-
-      try {
-        // MongoDB/backend is the single source of truth for outing status.
-        const data = await apiFetch('/api/outings/mine', { method: 'GET' });
-        if (mounted) setStudentOutings(data || []);
-      } catch (err) {
-        // Do not replace fresh server data with stale localStorage data.
-        console.error('Failed to load outings from backend:', err.message);
-      }
+  async function loadOutings() {
+    if (!session || session.role !== 'student') {
+      setStudentOutings([]);
+      return;
     }
+
+    try {
+      // MongoDB/backend is the single source of truth for outing status.
+      const data = await apiFetch('/api/outings/mine', { method: 'GET' });
+      setStudentOutings(data || []);
+    } catch (err) {
+      console.error('Failed to load outings from backend:', err.message);
+    }
+  }
+
+  useEffect(() => {
+    let intervalId;
 
     const refreshOnFocus = () => loadOutings();
 
@@ -73,7 +72,6 @@ function App() {
     }
 
     return () => {
-      mounted = false;
       if (intervalId) window.clearInterval(intervalId);
       window.removeEventListener('focus', refreshOnFocus);
     };
@@ -86,12 +84,13 @@ function App() {
         setSession={setSession}
         studentOutings={studentOutings}
         setStudentOutings={setStudentOutings}
+        refreshOutings={loadOutings}
       />
     </BrowserRouter>
   );
 }
 
-function AppLayout({ session, setSession, studentOutings, setStudentOutings }) {
+function AppLayout({ session, setSession, studentOutings, setStudentOutings, refreshOutings }) {
   const navigate = useNavigate();
 
   const handleLogout = () => {
@@ -201,7 +200,7 @@ function AppLayout({ session, setSession, studentOutings, setStudentOutings }) {
             path="/student-dashboard"
             element={
               <ProtectedRoute session={session} requiredRole="student">
-                <StudentDashboard session={session} studentOutings={studentOutings} />
+                <StudentDashboard session={session} studentOutings={studentOutings} refreshOutings={refreshOutings} />
               </ProtectedRoute>
             }
           />
@@ -341,6 +340,7 @@ function StudentAuthPage({ role, mode, session, setSession }) {
     hostelBlock: '',
     roomNumber: '',
     emergencyContact: '',
+    emergencyPhone: '',
   });
 
   const isSignup = mode === 'signup';
@@ -371,7 +371,7 @@ function StudentAuthPage({ role, mode, session, setSession }) {
             ...form,
             emergencyContact: {
               name: form.emergencyContact || 'Guardian',
-              phone: form.phone || '0000000000',
+              phone: form.emergencyPhone || form.phone,
               relation: 'Guardian',
             },
           }
@@ -443,6 +443,13 @@ function StudentAuthPage({ role, mode, session, setSession }) {
                 <label>
                   Emergency contact name
                   <input name="emergencyContact" value={form.emergencyContact} onChange={handleChange} required />
+                </label>
+              </div>
+
+              <div className="form-row split">
+                <label>
+                  Emergency contact phone
+                  <input name="emergencyPhone" value={form.emergencyPhone} onChange={handleChange} required />
                 </label>
               </div>
             </>
@@ -625,12 +632,89 @@ function WardenAuthPage({ role, mode, session, setSession }) {
   );
 }
 
-function StudentDashboard({ session, studentOutings }) {
+function StudentDashboard({ session, studentOutings, refreshOutings }) {
+  const [actionLoading, setActionLoading] = useState(false);
+  const [actionMsg, setActionMsg] = useState('');
+
   const recentRequests = studentOutings.slice(0, 5);
   const totalOutings = studentOutings.length;
   const pendingCount = studentOutings.filter((outing) => outing.status === 'pending').length;
   const approvedCount = studentOutings.filter((outing) => outing.status === 'approved' || outing.status === 'ongoing').length;
   const activeOuting = studentOutings.find((outing) => outing.status === 'ongoing' || outing.status === 'approved');
+
+  useEffect(() => {
+    let pingInterval;
+    const ongoingOuting = studentOutings.find((o) => o.status === 'ongoing');
+    if (ongoingOuting) {
+      const sendLocationPing = async () => {
+        try {
+          const { latitude, longitude } = await getBrowserLocation();
+          await apiFetch(`/api/location/${ongoingOuting.id || ongoingOuting._id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ latitude, longitude }),
+          });
+        } catch {
+          // ignore background ping error
+        }
+      };
+      sendLocationPing();
+      pingInterval = setInterval(sendLocationPing, 30000);
+    }
+    return () => {
+      if (pingInterval) clearInterval(pingInterval);
+    };
+  }, [studentOutings]);
+
+  const handleDepart = async (outingId) => {
+    try {
+      setActionLoading(true);
+      setActionMsg('');
+      const { latitude, longitude } = await getBrowserLocation();
+      await apiFetch(`/api/outings/${outingId}/depart`, {
+        method: 'PATCH',
+        body: JSON.stringify({ latitude, longitude }),
+      });
+      setActionMsg('Check-out successful. Location tracking is now ACTIVE.');
+      if (refreshOutings) await refreshOutings();
+    } catch (err) {
+      alert(err.message || 'Check-out failed');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleReturn = async (outingId) => {
+    try {
+      setActionLoading(true);
+      setActionMsg('');
+      await apiFetch(`/api/outings/${outingId}/return`, {
+        method: 'PATCH',
+      });
+      setActionMsg('Check-in successful. Welcome back!');
+      if (refreshOutings) await refreshOutings();
+    } catch (err) {
+      alert(err.message || 'Check-in failed');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleSendSOS = async (outingId) => {
+    if (!window.confirm('Are you sure you want to send an emergency SOS alert to the warden?')) return;
+    try {
+      setActionLoading(true);
+      const { latitude, longitude } = await getBrowserLocation();
+      await apiFetch('/api/alerts/sos', {
+        method: 'POST',
+        body: JSON.stringify({ outingRequestId: outingId, latitude, longitude }),
+      });
+      alert('Emergency SOS alert sent to warden!');
+    } catch (err) {
+      alert(err.message || 'SOS dispatch failed');
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   return (
     <div className="page-section">
@@ -671,13 +755,55 @@ function StudentDashboard({ session, studentOutings }) {
 
           <div className="status-box">
             <div className={classNames('status-pill', activeOuting ? 'active' : '')}>
-              {activeOuting ? 'Location sharing active' : 'No active outing'}
+              {activeOuting
+                ? activeOuting.status === 'ongoing'
+                  ? 'Location sharing ACTIVE (Out of Hostel)'
+                  : 'Outing Approved (Ready to Check Out)'
+                : 'No active outing'}
             </div>
             <p>
               {activeOuting
-                ? `Your outing to ${activeOuting.destination} is currently in progress.`
+                ? activeOuting.status === 'ongoing'
+                  ? `Your outing to ${activeOuting.destination} is currently in progress.`
+                  : `Your outing request to ${activeOuting.destination} has been approved!`
                 : 'You are currently in the hostel with location sharing off.'}
             </p>
+
+            {actionMsg && <div className="alert success">{actionMsg}</div>}
+
+            {activeOuting && (
+              <div className="action-row" style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                {activeOuting.status === 'approved' && (
+                  <button
+                    type="button"
+                    className="primary-button small-button"
+                    onClick={() => handleDepart(activeOuting.id || activeOuting._id)}
+                    disabled={actionLoading}
+                  >
+                    {actionLoading ? 'Processing...' : 'Depart / Check Out'}
+                  </button>
+                )}
+                {(activeOuting.status === 'ongoing' || activeOuting.status === 'overdue') && (
+                  <button
+                    type="button"
+                    className="primary-button small-button"
+                    onClick={() => handleReturn(activeOuting.id || activeOuting._id)}
+                    disabled={actionLoading}
+                  >
+                    {actionLoading ? 'Processing...' : 'Return / Check In'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="secondary-button small-button"
+                  style={{ backgroundColor: '#dc2626', color: '#fff', border: 'none' }}
+                  onClick={() => handleSendSOS(activeOuting.id || activeOuting._id)}
+                  disabled={actionLoading}
+                >
+                  Emergency SOS
+                </button>
+              </div>
+            )}
           </div>
 
           <ul className="info-list">
@@ -687,7 +813,7 @@ function StudentDashboard({ session, studentOutings }) {
             </li>
             <li>
               <span>Location sharing</span>
-              <strong>{activeOuting ? 'Enabled' : 'Disabled'}</strong>
+              <strong>{activeOuting && activeOuting.status === 'ongoing' ? 'Enabled' : 'Disabled'}</strong>
             </li>
             <li>
               <span>Latest request</span>
@@ -722,7 +848,7 @@ function StudentDashboard({ session, studentOutings }) {
   );
 }
 
-function StudentRequestPage({ session, studentOutings, setStudentOutings }) {
+function StudentRequestPage({ setStudentOutings }) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState('');
@@ -772,7 +898,7 @@ function StudentRequestPage({ session, studentOutings, setStudentOutings }) {
         const fresh = await apiFetch('/api/outings/mine', { method: 'GET' });
         setStudentOutings(fresh || []);
       } catch (refreshErr) {
-        // fallback to local update if refresh fails
+        console.warn('Refreshing outings from server failed, using local fallback', refreshErr);
         setStudentOutings((current) => [newEntry, ...current]);
       }
       setSuccess('Outing request submitted successfully.');
@@ -904,9 +1030,9 @@ function WardenDashboard({ session }) {
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const refreshDashboard = async () => {
+  const refreshDashboard = async (isInitial = false) => {
     try {
-      setLoading(true);
+      if (isInitial) setLoading(true);
       const [pendingResponse, liveResponse, alertResponse] = await Promise.all([
         apiFetch('/api/outings/pending'),
         apiFetch('/api/location/live'),
@@ -919,12 +1045,14 @@ function WardenDashboard({ session }) {
     } catch (error) {
       console.error('Dashboard load failed', error);
     } finally {
-      setLoading(false);
+      if (isInitial) setLoading(false);
     }
   };
 
   useEffect(() => {
-    refreshDashboard();
+    refreshDashboard(true);
+    const interval = setInterval(() => refreshDashboard(false), 5000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleApprove = async (outingId) => {
@@ -937,10 +1065,12 @@ function WardenDashboard({ session }) {
   };
 
   const handleReject = async (outingId) => {
+    const reason = window.prompt('Reason for rejection:', 'Request not approved for this outing window.');
+    if (reason === null) return;
     try {
       await apiFetch(`/api/outings/${outingId}/reject`, {
         method: 'PATCH',
-        body: JSON.stringify({ reason: 'Request not approved for this outing window.' }),
+        body: JSON.stringify({ reason }),
       });
       await refreshDashboard();
     } catch (error) {
@@ -958,10 +1088,12 @@ function WardenDashboard({ session }) {
   };
 
   const handleResolve = async (alertId) => {
+    const notes = window.prompt('Resolution notes:', 'Emergency resolved by hostel staff.');
+    if (notes === null) return;
     try {
       await apiFetch(`/api/alerts/${alertId}/resolve`, {
         method: 'PATCH',
-        body: JSON.stringify({ notes: 'Emergency resolved by hostel staff.' }),
+        body: JSON.stringify({ notes }),
       });
       await refreshDashboard();
     } catch (error) {

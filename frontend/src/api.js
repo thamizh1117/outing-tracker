@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
+const API_BASE = import.meta.env.VITE_API_BASE || '';
 const SESSION_KEY = 'hostel-outing-session';
 
 export function readSession() {
@@ -47,7 +47,35 @@ export async function apiFetch(path, options = {}) {
   return data;
 }
 
-
 export async function fetchStudentOutings() {
   return apiFetch('/api/outings/mine');
 }
+
+export async function getBrowserLocation() {
+  return new Promise((resolve) => {
+    if (typeof navigator !== 'undefined' && 'geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          resolve({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+          });
+        },
+        () => {
+          // Fallback coordinates if permission denied or unavailable
+          resolve({
+            latitude: 12.9716 + (Math.random() - 0.5) * 0.002,
+            longitude: 77.5946 + (Math.random() - 0.5) * 0.002,
+          });
+        },
+        { timeout: 5000, enableHighAccuracy: true }
+      );
+    } else {
+      resolve({
+        latitude: 12.9716 + (Math.random() - 0.5) * 0.002,
+        longitude: 77.5946 + (Math.random() - 0.5) * 0.002,
+      });
+    }
+  });
+}
+

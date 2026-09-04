@@ -19,7 +19,7 @@ const studentSchema = new mongoose.Schema(
 
     currentStatus: {
       type: String,
-      enum: ['in_hostel', 'out', 'pending_approval'],
+      enum: ['in_hostel', 'out', 'pending_approval', 'approved'],
       default: 'in_hostel',
     },
   },
