@@ -7,6 +7,7 @@ import {
   readSession,
   saveSession,
 } from './api';
+import { Map, MapMarker } from './mapcn/map';
 
 const roleLabels = {
   student: 'Student',
@@ -1169,33 +1170,54 @@ function WardenDashboard({ session }) {
               )}
             </section>
 
-            <section className="panel">
+            <section className="panel full-panel">
               <div className="panel-header compact">
                 <h3>Live student tracking</h3>
               </div>
-
-              {liveLocations.length > 0 ? (
-                <div className="list-stack">
-                  {liveLocations.map((location) => (
-                    <div key={location._id} className="request-card">
-                      <div>
-                        <strong>{location.student?.name}</strong>
-                        <small>
-                          {location.student?.hostelBlock} · {location.student?.rollNumber}
-                        </small>
-                      </div>
-                      <div className="request-meta">
-                        <span>{location.outingRequest?.destination}</span>
-                        <small>
-                          {location.latitude}, {location.longitude}
-                        </small>
-                      </div>
-                    </div>
-                  ))}
+              
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                <div className="live-map-shell">
+                  <Map
+                    center={liveLocations.length > 0 ? [Number(liveLocations[0].longitude), Number(liveLocations[0].latitude)] : [0, 0]}
+                    zoom={15}
+                    className="project-alpha-live-map"
+                  >
+                    {liveLocations.map((location) => (
+                      <MapMarker
+                        key={location._id}
+                        longitude={Number(location.longitude)}
+                        latitude={Number(location.latitude)}
+                        popup={`${location.student?.name || 'Student'} — ${location.outingRequest?.destination || 'Outing'}`}
+                      />
+                    ))}
+                  </Map>
                 </div>
-              ) : (
-                <p className="empty-text">No active students are currently sharing a live location.</p>
-              )}
+                
+                <div>
+                  {liveLocations.length > 0 ? (
+                    <div className="list-stack">
+                      {liveLocations.map((location) => (
+                        <div key={location._id} className="request-card">
+                          <div>
+                            <strong>{location.student?.name}</strong>
+                            <small>
+                              {location.student?.hostelBlock} · {location.student?.rollNumber}
+                            </small>
+                          </div>
+                          <div className="request-meta">
+                            <span>{location.outingRequest?.destination}</span>
+                            <small>
+                              {location.latitude.toFixed(6)}, {location.longitude.toFixed(6)}
+                            </small>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="empty-text">No active students are currently sharing a live location.</p>
+                  )}
+                </div>
+              </div>
             </section>
           </div>
 
